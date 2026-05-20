@@ -1,11 +1,5 @@
-import { useCallback, useEffect, useMemo } from "react";
-import { Identity } from "@clockworklabs/spacetimedb-sdk";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
-import {
-  DbConnection,
-  ErrorContext,
-  SubscriptionEventContext,
-} from "@/generated";
 import {
   setConnectionStatus,
   setConnection,
@@ -25,6 +19,10 @@ import { useConnectionState } from "./spacetime/use-connection-state";
 import { useTableHandlers } from "./spacetime/use-table-handlers";
 import { useReducerHandlers } from "./spacetime/use-reducer-handlers";
 import { useReducerCaller } from "./spacetime/use-reducer-caller";
+import {
+  SpacetimeConnection,
+  SpacetimeHttpClient,
+} from "@/lib/spacetime-http";
 
 export const useSpacetimeDB = () => {
   const dispatch = useAppDispatch();
@@ -32,34 +30,61 @@ export const useSpacetimeDB = () => {
     (state) => state.spacetime
   );
 
-  // Get all table data from the state
+  const pollingIntervalRef = useRef<number | null>(null);
+
   const spacetimeState = useAppSelector((state) => state.spacetime);
 
-  // Custom hooks for state management
   const { registerEventCallbacks, unregisterEventCallbacks, getCallback } =
     useEventCallbacks();
   const connectionState = useConnectionState();
 
-  // Discover schema once
   const discoveredTables = spacetimeIntrospector.discoverTables();
   const discoveredReducers = spacetimeIntrospector.discoverReducers();
 
-  // Derived state
   const isConnected = connectionStatus === "connected";
   const isConnecting = connectionStatus === "connecting";
 
-  // Table and reducer handlers
-  const { setupTableHandlers } = useTableHandlers(
-    discoveredTables,
-    getCallback
-  );
+  const { loadAllTables } = useTableHandlers(discoveredTables);
   const { setupReducerHandlers } = useReducerHandlers(
     discoveredReducers,
     getCallback
   );
-  const { callReducer } = useReducerCaller(connection, discoveredReducers);
 
-  // Table access helpers
+  const refreshAllTables = useCallback(
+    async (activeConnection?: SpacetimeConnection | null) => {
+      const connectionToUse =
+        activeConnection || (connection as SpacetimeConnection | null);
+      if (!connectionToUse) return;
+
+      await loadAllTables(connectionToUse.client, connectionToUse.token);
+    },
+    [connection, loadAllTables]
+  );
+
+  const { callReducer } = useReducerCaller(
+    connection as SpacetimeConnection | null,
+    discoveredReducers,
+    () => refreshAllTables()
+  );
+
+  const stopPolling = useCallback(() => {
+    if (pollingIntervalRef.current !== null) {
+      window.clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(
+    (activeConnection: SpacetimeConnection) => {
+      stopPolling();
+
+      pollingIntervalRef.current = window.setInterval(() => {
+        void refreshAllTables(activeConnection);
+      }, spacetimeConfig.pollInterval);
+    },
+    [refreshAllTables, stopPolling]
+  );
+
   const getTableData = useCallback(
     (tableName: string) => {
       return spacetimeState[tableName] || [];
@@ -67,11 +92,9 @@ export const useSpacetimeDB = () => {
     [spacetimeState]
   );
 
-  // Specific table getters
   const users = useMemo(() => getTableData("user"), [getTableData]);
   const authEvents = useMemo(() => getTableData("auth_event"), [getTableData]);
 
-  // Current user lookup - handles both camelCase and snake_case field names
   const currentUser = useMemo(() => {
     if (!users || users.length === 0) return null;
 
@@ -79,15 +102,14 @@ export const useSpacetimeDB = () => {
       return users[0] || null;
     }
 
-    let user = users.find(
-      (user: any) =>
-        user.currentIdentity === identity || user.current_identity === identity
+    const user = users.find(
+      (item: any) =>
+        item.currentIdentity === identity || item.current_identity === identity
     );
 
     return user || null;
   }, [users, identity]);
 
-  // Get current user by wallet address as fallback
   const getUserByWalletAddress = useCallback(
     (walletAddress: string) => {
       if (!users || users.length === 0) return null;
@@ -103,12 +125,10 @@ export const useSpacetimeDB = () => {
     [users]
   );
 
-  // Get user's recent auth events
   const getCurrentUserAuthEvents = useMemo(() => {
     if (!authEvents || !currentUser) return [];
 
-    const walletAddress =
-      currentUser.walletAddress || currentUser.wallet_address;
+    const walletAddress = currentUser.walletAddress || currentUser.wallet_address;
     if (!walletAddress) return [];
 
     return authEvents
@@ -124,45 +144,13 @@ export const useSpacetimeDB = () => {
       });
   }, [authEvents, currentUser]);
 
-  // Initialize tables on mount
   useEffect(() => {
     discoveredTables.forEach((table) => {
       dispatch(initializeTable(table.name));
     });
   }, [dispatch, discoveredTables]);
 
-  const setupSubscriptions = useCallback(
-    (conn: DbConnection) => {
-      try {
-        conn
-          .subscriptionBuilder()
-          .onApplied((ctx: SubscriptionEventContext) => {
-            try {
-              setupTableHandlers(ctx);
-            } catch (error) {
-              console.error("Error setting up table handlers:", error);
-            }
-          })
-          .onError((_ctx: ErrorContext, error?: Error) => {
-            const errorMessage = `Subscription failed: ${
-              error?.message || "Unknown error"
-            }`;
-            dispatch(setError(errorMessage));
-            dispatch(setConnectionStatus("error"));
-          })
-          .subscribeToAllTables();
-
-        setupReducerHandlers(conn);
-      } catch (error) {
-        const errorMessage = `Failed to setup subscriptions: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`;
-        dispatch(setError(errorMessage));
-        dispatch(setConnectionStatus("error"));
-      }
-    },
-    [setupTableHandlers, setupReducerHandlers, dispatch]
-  );
+  useEffect(() => () => stopPolling(), [stopPolling]);
 
   const connect = useCallback(
     async (retryCount = 0) => {
@@ -176,67 +164,43 @@ export const useSpacetimeDB = () => {
       dispatch(clearErrorAction());
 
       try {
-        const token = localStorage.getItem("spacetimedb_token");
-        const builder = DbConnection.builder()
-          .withUri(spacetimeConfig.uri)
-          .withModuleName(spacetimeConfig.moduleName);
+        const existingToken = localStorage.getItem("spacetimedb_token");
+        const client = new SpacetimeHttpClient(
+          spacetimeConfig.uri,
+          spacetimeConfig.moduleName
+        );
+
+        const identityResponse = await client.getOrCreateIdentity(existingToken);
+        const token = identityResponse.token || existingToken;
 
         if (token) {
-          builder.withToken(token);
+          localStorage.setItem("spacetimedb_token", token);
         }
 
-        await builder
-          .onConnect(
-            (conn: DbConnection, identity: Identity, receivedToken: string) => {
-              if (receivedToken) {
-                localStorage.setItem("spacetimedb_token", receivedToken);
-              }
+        const { tables } = await spacetimeIntrospector.discoverSchema(
+          client,
+          token
+        );
 
-              dispatch(setIdentity(identity.toHexString()));
-              dispatch(setConnectionStatus("connected"));
-              dispatch(setConnection(conn));
-              connectionState.setConnecting(false);
+        tables.forEach((table) => {
+          dispatch(initializeTable(table.name));
+        });
 
-              setTimeout(() => {
-                setupSubscriptions(conn);
-              }, spacetimeConfig.subscriptionDelay);
-            }
-          )
-          .onDisconnect((_ctx: ErrorContext, error?: Error) => {
-            connectionState.setConnecting(false);
-            dispatch(setConnectionStatus("disconnected"));
-            dispatch(setConnection(null));
-            dispatch(clearAllTables());
-          })
-          .onConnectError((_ctx: ErrorContext, error: Error) => {
-            if (!connectionState.isIntentionalDisconnect()) {
-              connectionState.setConnecting(false);
-              dispatch(setError(error.message));
-              dispatch(setConnectionStatus("error"));
+        const nextConnection: SpacetimeConnection = {
+          client,
+          token: token || null,
+          identity: identityResponse.identity,
+        };
 
-              if (retryCount < spacetimeConfig.maxRetries) {
-                const retryDelay =
-                  spacetimeConfig.retryBackoffMultiplier *
-                  1000 *
-                  (retryCount + 1);
-                setTimeout(() => {
-                  connect(retryCount + 1);
-                }, retryDelay);
-              } else {
-                dispatch(
-                  setError(
-                    `Connection failed after ${spacetimeConfig.maxRetries} attempts: ${error.message}`
-                  )
-                );
-              }
-            } else {
-              connectionState.setConnecting(false);
-              connectionState.setIntentionalDisconnect(false);
-              dispatch(setConnectionStatus("disconnected"));
-            }
-          })
-          .build();
-      } catch (error) {
+        dispatch(setIdentity(identityResponse.identity));
+        dispatch(setConnection(nextConnection));
+        dispatch(setConnectionStatus("connected"));
+        connectionState.setConnecting(false);
+
+        await refreshAllTables(nextConnection);
+        setupReducerHandlers();
+        startPolling(nextConnection);
+      } catch (caughtError) {
         if (!connectionState.isIntentionalDisconnect()) {
           connectionState.setConnecting(false);
 
@@ -244,12 +208,12 @@ export const useSpacetimeDB = () => {
             const retryDelay =
               spacetimeConfig.retryBackoffMultiplier * 1000 * (retryCount + 1);
             setTimeout(() => {
-              connect(retryCount + 1);
+              void connect(retryCount + 1);
             }, retryDelay);
           } else {
             const errorMessage =
-              error instanceof Error
-                ? error.message
+              caughtError instanceof Error
+                ? caughtError.message
                 : "Unknown connection error";
             dispatch(
               setError(
@@ -265,7 +229,14 @@ export const useSpacetimeDB = () => {
         }
       }
     },
-    [dispatch, setupSubscriptions, isConnected, connectionState]
+    [
+      connectionState,
+      dispatch,
+      isConnected,
+      refreshAllTables,
+      setupReducerHandlers,
+      startPolling,
+    ]
   );
 
   const disconnect = useCallback(() => {
@@ -273,7 +244,7 @@ export const useSpacetimeDB = () => {
       connectionState.setIntentionalDisconnect(true);
       connectionState.setConnecting(false);
 
-      connection.disconnect();
+      stopPolling();
       dispatch(setConnectionStatus("disconnected"));
       dispatch(setConnection(null));
       dispatch(clearAllTables());
@@ -282,24 +253,32 @@ export const useSpacetimeDB = () => {
         connectionState.setIntentionalDisconnect(false);
       }, 1000);
     }
-  }, [connection, dispatch, connectionState]);
+  }, [connection, connectionState, dispatch, stopPolling]);
 
   const clearError = useCallback(() => {
     dispatch(clearErrorAction());
   }, [dispatch]);
 
-  const refreshSchema = useCallback(() => {
-    const newTables = spacetimeIntrospector.discoverTables();
-    const newReducers = spacetimeIntrospector.discoverReducers();
+  const refreshSchema = useCallback(async () => {
+    const activeConnection = connection as SpacetimeConnection | null;
+    if (!activeConnection) {
+      return { tables: [], reducers: [] };
+    }
 
-    newTables.forEach((table) => {
+    const schema = await spacetimeIntrospector.discoverSchema(
+      activeConnection.client,
+      activeConnection.token
+    );
+
+    schema.tables.forEach((table) => {
       dispatch(initializeTable(table.name));
     });
 
-    return { tables: newTables, reducers: newReducers };
-  }, [dispatch]);
+    await refreshAllTables(activeConnection);
 
-  // Table operations
+    return schema;
+  }, [connection, dispatch, refreshAllTables]);
+
   const handleTableInsert = useCallback(
     (tableName: string, row: any) => {
       dispatch(insertTableRow({ tableName, row }));
@@ -321,10 +300,9 @@ export const useSpacetimeDB = () => {
     [dispatch]
   );
 
-  // User-specific helper functions
   const refreshCurrentUser = useCallback(() => {
     if (isConnected) {
-      callReducer("get_current_user", {});
+      void callReducer("get_current_user", {});
     }
   }, [callReducer, isConnected]);
 
@@ -336,7 +314,6 @@ export const useSpacetimeDB = () => {
 
       await callReducer("update_user_profile", { nickname: nickname || null });
 
-      // Refresh user data after update
       setTimeout(() => {
         refreshCurrentUser();
       }, 500);
@@ -345,7 +322,6 @@ export const useSpacetimeDB = () => {
   );
 
   return {
-    // State
     connection,
     connectionStatus,
     identity,
@@ -353,34 +329,27 @@ export const useSpacetimeDB = () => {
     isConnected,
     isConnecting,
 
-    // Connection methods
     connect,
     disconnect,
     clearError,
 
-    // Reducer operations
     callReducer,
 
-    // Event callbacks
     registerEventCallbacks,
     unregisterEventCallbacks,
 
-    // Schema
     discoveredTables,
     discoveredReducers,
     refreshSchema,
 
-    // Table operations
     handleTableInsert,
     handleTableUpdate,
     handleTableDelete,
 
-    // Table data access
     getTableData,
     users,
     authEvents,
 
-    // User-specific data and operations
     currentUser,
     isCurrentUserAdmin: true,
     getCurrentUserAuthEvents,

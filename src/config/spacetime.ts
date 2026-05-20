@@ -1,12 +1,12 @@
 import { z } from "zod";
 
 const SpacetimeConfigSchema = z.object({
-  uri: z.string().url().default("ws://127.0.0.1:3000"),
+  uri: z.string().url().default("http://127.0.0.1:3000"),
   moduleName: z.string().default("blockdrop-main"),
   maxRetries: z.coerce.number().min(1).max(10).default(3),
   subscriptionDelay: z.coerce.number().min(0).max(5000).default(500),
   retryBackoffMultiplier: z.coerce.number().min(1).max(5).default(2),
-  generatedPath: z.string().default("./generated"),
+  pollInterval: z.coerce.number().min(1000).max(60000).default(5000),
 });
 
 export type SpacetimeConfig = z.infer<typeof SpacetimeConfigSchema>;
@@ -17,5 +17,5 @@ export const spacetimeConfig = SpacetimeConfigSchema.parse({
   maxRetries: import.meta.env.VITE_SPACETIME_MAX_RETRIES,
   subscriptionDelay: import.meta.env.VITE_SPACETIME_SUBSCRIPTION_DELAY,
   retryBackoffMultiplier: import.meta.env.VITE_SPACETIME_RETRY_BACKOFF,
-  generatedPath: import.meta.env.VITE_SPACETIME_GENERATED_PATH,
+  pollInterval: import.meta.env.VITE_SPACETIME_POLL_INTERVAL,
 });

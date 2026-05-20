@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import type { DbConnection, ReducerEventContext } from "@/generated";
 import type { EventCallbacks } from "./use-event-callbacks";
 import { ReducerMetadata } from "@/types/spacetime";
 
@@ -7,42 +6,12 @@ export const useReducerHandlers = (
   discoveredReducers: ReducerMetadata[],
   getCallback: (name: string) => EventCallbacks[string]
 ) => {
-  const setupReducerHandlers = useCallback(
-    (conn: DbConnection) => {
-      discoveredReducers.forEach((reducer) => {
-        const { name: reducerName } = reducer;
-
-        try {
-          const camelCaseMethodName = toCamelCase(reducerName);
-          const eventHandlerName = `on${capitalize(camelCaseMethodName)}`;
-
-          const callback = getCallback(eventHandlerName);
-          if (!callback) {
-            return;
-          }
-
-          const reducerHandler = (conn.reducers as any)[eventHandlerName];
-
-          if (!reducerHandler || typeof reducerHandler !== "function") {
-            console.warn(
-              `Event handler not found: ${reducerName} (${eventHandlerName})`
-            );
-            return;
-          }
-
-          reducerHandler((ctx: ReducerEventContext, ...args: any[]) => {
-            callback(ctx, ...args);
-          });
-        } catch (error) {
-          console.error(
-            `Failed to setup reducer handler ${reducerName}:`,
-            error
-          );
-        }
-      });
-    },
-    [discoveredReducers, getCallback]
-  );
+  const setupReducerHandlers = useCallback(() => {
+    discoveredReducers.forEach((reducer) => {
+      const eventHandlerName = `on${capitalize(toCamelCase(reducer.name))}`;
+      getCallback(eventHandlerName);
+    });
+  }, [discoveredReducers, getCallback]);
 
   return { setupReducerHandlers };
 };

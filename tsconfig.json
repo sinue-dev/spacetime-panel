@@ -17,10 +17,9 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"],
-      "@/generated/*": ["./src/generated/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src"],
-  "exclude": ["src/generated/**/*.d.ts"]
+  "exclude": []
 }

@@ -1,18 +1,11 @@
-import {
-  AlgebraicType,
-  ProductType,
-  SumType,
-  ProductTypeElement,
-} from "@clockworklabs/spacetimedb-sdk";
-import * as GeneratedModule from "@/generated";
 import { safeStringify } from "@/utils/serialization";
 import { FieldMetadata } from "@/types/spacetime";
 
 export class TypeAnalyzer {
   private typeCache = new Map<string, FieldMetadata[]>();
 
-  analyzeAlgebraicType(type: AlgebraicType, name = ""): FieldMetadata[] {
-    const cacheKey = safeStringify(type);
+  analyzeAlgebraicType(type: any, name = ""): FieldMetadata[] {
+    const cacheKey = `${name}:${safeStringify(type)}`;
 
     if (this.typeCache.has(cacheKey)) {
       return this.typeCache.get(cacheKey)!;
@@ -20,156 +13,129 @@ export class TypeAnalyzer {
 
     let fields: FieldMetadata[] = [];
 
-    if (type.isProductType()) {
-      fields = this.analyzeProductType(type.product);
-    } else if (type.isSumType()) {
-      fields = this.analyzeSumType(type.sum, name);
+    if (this.isProductType(type)) {
+      fields = (type.Product?.elements || []).map((element: any) =>
+        this.createField(
+          element.name || "unknown",
+          element.algebraic_type || element.algebraicType
+        )
+      );
     } else {
-      fields = [this.createFieldFromPrimitive(type, name)];
+      fields = [this.createField(name || "value", type)];
     }
-
-    // Enhance enum fields with constructors
-    fields = fields.map((field) => this.enhanceEnumField(field));
 
     this.typeCache.set(cacheKey, fields);
     return fields;
   }
 
-  private analyzeProductType(productType: ProductType): FieldMetadata[] {
-    if (!productType.elements) return [];
-
-    return productType.elements.map((element: ProductTypeElement) => ({
-      name: element.name || "unknown",
-      type: this.getTypeString(element.algebraicType),
-      isOptional: this.isOptionalType(element.algebraicType),
-      isArray: this.isArrayType(element.algebraicType),
-      displayName: this.formatDisplayName(element.name || "unknown"),
-      inputType: this.inferInputType(
-        this.getTypeString(element.algebraicType),
-        element.name || ""
-      ),
-      validation: this.generateValidation(
-        this.getTypeString(element.algebraicType),
-        element.name || ""
-      ),
-      enumValues: this.extractEnumValues(element.algebraicType),
-    }));
+  analyzeColumn(name: string, algebraicType: any): FieldMetadata {
+    return this.createField(name, algebraicType);
   }
 
-  private analyzeSumType(sumType: SumType, name: string): FieldMetadata[] {
-    if (!sumType.variants) return [];
-
-    const enumValues = sumType.variants.map((variant) => variant.name || "");
-
-    return [
-      {
-        name: name || "variant",
-        type: "enum",
-        isOptional: false,
-        isArray: false,
-        displayName: this.formatDisplayName(name || "variant"),
-        inputType: "select" as const,
-        enumValues,
-        validation: { required: true },
-      },
-    ];
-  }
-
-  private createFieldFromPrimitive(
-    type: AlgebraicType,
-    name: string
-  ): FieldMetadata {
-    const typeString = this.getTypeString(type);
+  private createField(name: string, algebraicType: any): FieldMetadata {
+    const normalized = this.unwrapOptionType(algebraicType);
+    const typeString = this.getTypeString(normalized.type);
+    const enumValues = this.extractEnumValues(normalized.type);
 
     return {
-      name: name || "value",
+      name,
       type: typeString,
-      isOptional: false,
-      isArray: false,
-      displayName: this.formatDisplayName(name || "value"),
+      isOptional: normalized.isOptional,
+      isArray: this.isArrayType(normalized.type),
+      displayName: this.formatDisplayName(name),
       inputType: this.inferInputType(typeString, name),
-      validation: this.generateValidation(typeString, name),
+      validation: this.generateValidation(typeString, name, normalized.isOptional),
+      enumValues,
+      _enumConstructor: undefined,
     };
   }
 
-  private getTypeString(type: AlgebraicType): string {
-    if (type.isSumType()) {
-      const sumType = type.sum;
+  private unwrapOptionType(type: any): { type: any; isOptional: boolean } {
+    if (!type || typeof type !== "object") {
+      return { type, isOptional: false };
+    }
 
-      // Check for Option type
-      if (sumType.variants?.length === 2) {
-        const variantNames = sumType.variants.map((v) => v.name?.toLowerCase());
-        if (variantNames.includes("some") && variantNames.includes("none")) {
-          const someVariant = sumType.variants.find(
-            (v) => v.name?.toLowerCase() === "some"
-          );
-          if (someVariant?.algebraicType) {
-            return this.getTypeString(someVariant.algebraicType);
-          }
-        }
-      }
+    if ("Option" in type) {
+      return { type: type.Option, isOptional: true };
+    }
 
+    return { type, isOptional: false };
+  }
+
+  private getTypeString(type: any): string {
+    if (!type || typeof type !== "object") return "unknown";
+
+    const keys = Object.keys(type);
+    const typeName = keys[0];
+
+    const primitiveMap: Record<string, string> = {
+      Bool: "boolean",
+      U8: "u8",
+      U16: "u16",
+      U32: "u32",
+      U64: "u64",
+      U128: "u128",
+      U256: "u256",
+      I8: "i8",
+      I16: "i16",
+      I32: "i32",
+      I64: "i64",
+      I128: "i128",
+      I256: "i256",
+      F32: "f32",
+      F64: "f64",
+      String: "string",
+      Identity: "Identity",
+      ConnectionId: "ConnectionId",
+      Timestamp: "Timestamp",
+      TimeDuration: "TimeDuration",
+      ScheduleAt: "ScheduleAt",
+    };
+
+    if (typeName in primitiveMap) {
+      return primitiveMap[typeName];
+    }
+
+    if (typeName === "Array") {
+      return `Array<${this.getTypeString(type.Array)}>`;
+    }
+
+    if (typeName === "Map") {
+      const keyType = this.getTypeString(type.Map?.key || type.Map?.key_type);
+      const valueType = this.getTypeString(type.Map?.value || type.Map?.value_type);
+      return `Map<${keyType}, ${valueType}>`;
+    }
+
+    if (typeName === "Sum") {
       return "enum";
     }
 
-    const typeMap: Record<string, string> = {
-      [AlgebraicType.Type.Bool]: "boolean",
-      [AlgebraicType.Type.U8]: "u8",
-      [AlgebraicType.Type.U16]: "u16",
-      [AlgebraicType.Type.U32]: "u32",
-      [AlgebraicType.Type.U64]: "u64",
-      [AlgebraicType.Type.I8]: "i8",
-      [AlgebraicType.Type.I16]: "i16",
-      [AlgebraicType.Type.I32]: "i32",
-      [AlgebraicType.Type.I64]: "i64",
-      [AlgebraicType.Type.F32]: "f32",
-      [AlgebraicType.Type.F64]: "f64",
-      [AlgebraicType.Type.String]: "string",
-      [AlgebraicType.Type.SumType]: "enum",
-      [AlgebraicType.Type.ProductType]: "object",
-    };
-
-    if (type.type in typeMap) {
-      return typeMap[type.type];
+    if (typeName === "Product") {
+      return "object";
     }
-
-    if (type.isArrayType()) {
-      return `Array<${this.getTypeString(type.array)}>`;
-    }
-
-    if (type.isMapType()) {
-      return `Map<${this.getTypeString(type.map.keyType)}, ${this.getTypeString(
-        type.map.valueType
-      )}>`;
-    }
-
-    // Special types
-    if (type.isIdentity()) return "Identity";
-    if (type.isConnectionId()) return "ConnectionId";
-    if (type.isTimestamp()) return "Timestamp";
-    if (type.isTimeDuration()) return "TimeDuration";
-    if (type.isScheduleAt()) return "ScheduleAt";
 
     return "unknown";
   }
 
-  private isOptionalType(type: AlgebraicType): boolean {
-    if (type.isSumType() && type.sum.variants) {
-      const variantNames = type.sum.variants.map((v) => v.name?.toLowerCase());
-      return variantNames.includes("none") && variantNames.includes("some");
-    }
-    return false;
+  private isProductType(type: any): boolean {
+    return Boolean(type && typeof type === "object" && "Product" in type);
   }
 
-  private isArrayType(type: AlgebraicType): boolean {
-    return type.isArrayType();
+  private isArrayType(type: any): boolean {
+    return Boolean(type && typeof type === "object" && "Array" in type);
   }
 
-  private extractEnumValues(type: AlgebraicType): string[] | undefined {
-    if (type.isSumType() && type.sum?.variants && !this.isOptionalType(type)) {
-      return type.sum.variants.map((v) => v.name || "");
+  private extractEnumValues(type: any): string[] | undefined {
+    if (!type || typeof type !== "object" || !("Sum" in type)) {
+      return undefined;
     }
-    return undefined;
+
+    const variants = type.Sum?.variants;
+    if (!Array.isArray(variants)) {
+      return undefined;
+    }
+
+    return variants.map((variant: any) => variant.name).filter(Boolean);
   }
 
   private inferInputType(
@@ -212,7 +178,7 @@ export class TypeAnalyzer {
       return "date";
     }
 
-    if (/^[ui](8|16|32|64)$|^f(32|64)$/.test(typeString)) {
+    if (/^[ui](8|16|32|64|128|256)$|^i(8|16|32|64|128|256)$|^f(32|64)$/.test(typeString)) {
       return "number";
     }
 
@@ -221,12 +187,13 @@ export class TypeAnalyzer {
 
   private generateValidation(
     typeString: string,
-    fieldName: string
+    fieldName: string,
+    isOptional: boolean
   ): FieldMetadata["validation"] {
     const validation: FieldMetadata["validation"] = {};
     const lowerName = fieldName.toLowerCase();
 
-    if (!lowerName.includes("optional") && !typeString.includes("Option")) {
+    if (!isOptional && !lowerName.includes("optional")) {
       validation.required = true;
     }
 
@@ -253,59 +220,9 @@ export class TypeAnalyzer {
     return validation;
   }
 
-  private enhanceEnumField(field: FieldMetadata): FieldMetadata {
-    if (field.type === "enum" && field.enumValues) {
-      const enumConstructor = this.findEnumConstructor(
-        field.name,
-        field.enumValues
-      );
-      return { ...field, _enumConstructor: enumConstructor };
-    }
-    return field;
-  }
-
-  private findEnumConstructor(fieldName: string, enumValues: string[]): any {
-    try {
-      const exportedItems = Object.keys(GeneratedModule);
-
-      const possibleEnums = exportedItems.filter((itemName) => {
-        const item = (GeneratedModule as any)[itemName];
-
-        if (typeof item === "function" || typeof item === "object") {
-          return enumValues.some(
-            (enumValue) =>
-              item[enumValue] !== undefined ||
-              typeof item[enumValue] === "function"
-          );
-        }
-        return false;
-      });
-
-      for (const enumName of possibleEnums) {
-        const EnumConstructor = (GeneratedModule as any)[enumName];
-        const testValue = enumValues[0];
-
-        try {
-          if (EnumConstructor[testValue] !== undefined) {
-            return EnumConstructor;
-          }
-        } catch {
-          continue;
-        }
-      }
-    } catch (error) {
-      console.warn(
-        `Failed to find enum constructor for field: ${fieldName}`,
-        error
-      );
-    }
-
-    return null;
-  }
-
   private formatDisplayName(name: string): string {
     return name
-      .split(/[_\s]+/)
+      .split(/[\s_]+/)
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(" ");
   }

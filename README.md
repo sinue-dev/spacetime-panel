@@ -55,13 +55,13 @@ This publishes your SpacetimeDB module to the running server. Replace `example` 
 spacetime logs example --follow
 ```
 
-### Generate TypeScript Bindings
+### HTTP API Based Introspection
 
 ```bash
-spacetime generate --lang typescript --out-dir ../spacetime-panel/src/generated
+curl http://127.0.0.1:3000/v1/database/<module-name>/schema
 ```
 
-This generates TypeScript type definitions and client code from your SpacetimeDB schema. The generated files will be placed in the specified output directory.
+This panel uses the SpacetimeDB v2.x HTTP API directly (`/schema`, `/sql`, `/call/*`) and no longer requires generated TypeScript bindings.
 
 ## Development
 

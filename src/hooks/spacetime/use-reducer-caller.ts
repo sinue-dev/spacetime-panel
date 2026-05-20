@@ -1,10 +1,11 @@
 import { useCallback } from "react";
-import type { DbConnection } from "@/generated";
-import { FieldMetadata, ReducerMetadata } from "@/types/spacetime";
+import { ReducerMetadata } from "@/types/spacetime";
+import { SpacetimeConnection } from "@/lib/spacetime-http";
 
 export const useReducerCaller = (
-  connection: DbConnection | null,
-  discoveredReducers: ReducerMetadata[]
+  connection: SpacetimeConnection | null,
+  discoveredReducers: ReducerMetadata[],
+  onReducerCalled?: () => Promise<void>
 ) => {
   const callReducer = useCallback(
     async (reducerName: string, args: any) => {
@@ -19,13 +20,6 @@ export const useReducerCaller = (
         throw new Error(`Reducer metadata not found: ${reducerName}`);
       }
 
-      const camelCaseMethodName = toCamelCase(reducerName);
-      const reducerMethod = (connection.reducers as any)[camelCaseMethodName];
-
-      if (!reducerMethod || typeof reducerMethod !== "function") {
-        throw new Error(`Reducer method not found: ${camelCaseMethodName}`);
-      }
-
       try {
         const convertedArgs = convertArgsToObject(args);
         const orderedArgs = createOrderedArgs(
@@ -33,13 +27,21 @@ export const useReducerCaller = (
           convertedArgs
         );
 
-        return await reducerMethod.call(connection.reducers, ...orderedArgs);
+        await connection.client.callReducer(
+          reducerName,
+          orderedArgs,
+          connection.token
+        );
+
+        if (onReducerCalled) {
+          await onReducerCalled();
+        }
       } catch (error) {
         console.error(`Failed to call reducer ${reducerName}:`, error);
         throw error;
       }
     },
-    [connection, discoveredReducers]
+    [connection, discoveredReducers, onReducerCalled]
   );
 
   return { callReducer };
@@ -49,6 +51,10 @@ const toCamelCase = (str: string): string =>
   str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 
 const convertArgsToObject = (args: any): Record<string, any> => {
+  if (!args || typeof args !== "object") {
+    return {};
+  }
+
   const converted: Record<string, any> = {};
 
   Object.keys(args).forEach((key) => {
@@ -60,11 +66,11 @@ const convertArgsToObject = (args: any): Record<string, any> => {
 };
 
 const createOrderedArgs = (
-  fields: FieldMetadata[],
+  fields: ReducerMetadata["fields"],
   convertedArgs: Record<string, any>
 ): any[] => {
   return fields.map((field) => {
-    let value = convertedArgs[field.name];
+    let value = convertedArgs[field.name] ?? convertedArgs[toCamelCase(field.name)];
 
     if (value !== null && value !== undefined) {
       value = convertValueByType(value, field.type);
@@ -74,7 +80,7 @@ const createOrderedArgs = (
       field.isOptional &&
       (value === null || value === undefined || value === "")
     ) {
-      return undefined;
+      return null;
     }
 
     return value;
@@ -86,8 +92,11 @@ const convertValueByType = (value: any, type: string): any => {
     return String(value);
   }
 
-  if (type === "u64" || type === "i64") {
-    return BigInt(value);
+  if (["u64", "u128", "u256", "i64", "i128", "i256"].includes(type)) {
+    if (typeof value === "bigint") {
+      return value.toString();
+    }
+    return String(value);
   }
 
   if (type === "boolean" || type === "Bool") {
