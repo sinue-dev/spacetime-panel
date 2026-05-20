@@ -8,7 +8,7 @@ import { SpacetimeHttpClient, SqlResult } from "@/lib/spacetime-http";
 const sqlResultToObjects = (result?: SqlResult): any[] => {
   if (!result) return [];
 
-  const columns = (result.schema?.elements || []).map((element) => element.name);
+  const columns = (result.schema?.elements || []).map((element) => element.name ?? "");
 
   if (!columns.length) {
     return [];
@@ -17,7 +17,7 @@ const sqlResultToObjects = (result?: SqlResult): any[] => {
   return (result.rows || []).map((row) => {
     const rowObject: Record<string, unknown> = {};
     columns.forEach((columnName, index) => {
-      rowObject[columnName] = row[index];
+      if (columnName) rowObject[columnName] = row[index];
     });
     return rowObject;
   });

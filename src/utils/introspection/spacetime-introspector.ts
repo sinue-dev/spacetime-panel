@@ -4,6 +4,8 @@ import { ExampleGenerator } from "./example-generator";
 import { categorizeItem, getIconForItem } from "./categorization";
 import { ReducerMetadata, TableMetadata } from "@/types/spacetime";
 import {
+  AlgebraicType,
+  ProductAlgebraicType,
   ReducerSchema,
   SpacetimeHttpClient,
   SpacetimeSchema,
@@ -50,14 +52,25 @@ export class SpacetimeIntrospector {
   }
 
   private buildTableMetadata(table: TableSchema): TableMetadata {
-    const fields = table.columns.map((column) =>
-      this.typeAnalyzer.analyzeColumn(column.name, column.algebraic_type)
-    );
+    // Resolve columns from the typespace using the product_type_ref index.
+    // The entry at typespace.types[product_type_ref] is expected to be a
+    // Product AlgebraicType: { "Product": { "elements": [...] } }
+    const typeEntry =
+      this.schemaCache?.typespace?.types?.[table.product_type_ref];
+    const productType = typeEntry as ProductAlgebraicType | undefined;
+    const elements: Array<{ name: string | null; algebraic_type: AlgebraicType }> =
+      productType?.Product?.elements ?? [];
+
+    const fields = elements
+      .filter((el) => el.name != null)
+      .map((el) =>
+        this.typeAnalyzer.analyzeColumn(el.name as string, el.algebraic_type)
+      );
 
     return {
       name: table.name,
       displayName: this.formatDisplayName(table.name),
-      primaryKey: this.inferPrimaryKey(table, fields),
+      primaryKey: this.inferPrimaryKey(table, fields, elements),
       fields,
       icon: getIconForItem(table.name),
       category: categorizeItem(table.name),
@@ -71,9 +84,11 @@ export class SpacetimeIntrospector {
 
   private buildReducerMetadata(reducer: ReducerSchema): ReducerMetadata {
     const params = reducer.params?.elements || [];
-    const fields = params.map((param) =>
-      this.typeAnalyzer.analyzeColumn(param.name, param.algebraic_type)
-    );
+    const fields = params
+      .filter((param) => param.name != null)
+      .map((param) =>
+        this.typeAnalyzer.analyzeColumn(param.name as string, param.algebraic_type)
+      );
     const isDestructive = this.isDestructiveReducer(reducer.name);
 
     return {
@@ -92,15 +107,21 @@ export class SpacetimeIntrospector {
     };
   }
 
-  private inferPrimaryKey(table: TableSchema, fields: any[]): string {
-    const firstPrimaryKeyIndex = table.primary_key?.[0];
+  private inferPrimaryKey(
+    table: TableSchema,
+    fields: any[],
+    elements: Array<{ name: string | null; algebraic_type: AlgebraicType }>
+  ): string {
+    // primary_key is a ColList; in SATS JSON it may be `[0]` or `{"data": [0]}`
+    const rawPk = table.primary_key;
+    const pkIndices: number[] = Array.isArray(rawPk)
+      ? rawPk
+      : (rawPk as { data: number[] }).data ?? [];
 
-    if (
-      typeof firstPrimaryKeyIndex === "number" &&
-      firstPrimaryKeyIndex >= 0 &&
-      firstPrimaryKeyIndex < table.columns.length
-    ) {
-      return table.columns[firstPrimaryKeyIndex].name;
+    const firstIndex = pkIndices[0];
+    if (typeof firstIndex === "number" && firstIndex >= 0 && firstIndex < elements.length) {
+      const colName = elements[firstIndex].name;
+      if (colName) return colName;
     }
 
     const idField = fields.find(
