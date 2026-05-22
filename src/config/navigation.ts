@@ -18,14 +18,14 @@ const NavigationConfigSchema = z.object({
 export type NavigationConfig = z.infer<typeof NavigationConfigSchema>;
 
 export const navigationConfig = NavigationConfigSchema.parse({
-  patternDepth: process.env.NAV_PATTERN_DEPTH,
-  minGroupSize: process.env.NAV_MIN_GROUP_SIZE,
-  enablePatternGrouping: process.env.NAV_ENABLE_PATTERN_GROUPING,
-  patternSeparator: process.env.NAV_PATTERN_SEPARATOR,
-  maxGroups: process.env.NAV_MAX_GROUPS,
-  showUngroupedInBase: process.env.NAV_SHOW_UNGROUPED_IN_BASE,
-  collapseSingleGroups: process.env.NAV_COLLAPSE_SINGLE_GROUPS,
-  groupSortBy: process.env.NAV_GROUP_SORT_BY,
-  showGroupCounts: process.env.NAV_SHOW_GROUP_COUNTS,
-  usePatternIcons: process.env.NAV_USE_PATTERN_ICONS,
+  patternDepth: import.meta.env.VITE_NAV_PATTERN_DEPTH,
+  minGroupSize: import.meta.env.VITE_NAV_MIN_GROUP_SIZE,
+  enablePatternGrouping: import.meta.env.VITE_NAV_ENABLE_PATTERN_GROUPING,
+  patternSeparator: import.meta.env.VITE_NAV_PATTERN_SEPARATOR,
+  maxGroups: import.meta.env.VITE_NAV_MAX_GROUPS,
+  showUngroupedInBase: import.meta.env.VITE_NAV_SHOW_UNGROUPED_IN_BASE,
+  collapseSingleGroups: import.meta.env.VITE_NAV_COLLAPSE_SINGLE_GROUPS,
+  groupSortBy: import.meta.env.VITE_NAV_GROUP_SORT_BY,
+  showGroupCounts: import.meta.env.VITE_NAV_SHOW_GROUP_COUNTS,
+  usePatternIcons: import.meta.env.VITE_NAV_USE_PATTERN_ICONS,
 });

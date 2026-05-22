@@ -93,7 +93,7 @@ const ConnectionMetrics = ({ identity }: { identity: string | null }) => {
   const metrics = [
     {
       label: "Protocol",
-      value: "WebSocket",
+      value: "HTTP",
       icon: Server,
       color: "text-blue-600 dark:text-blue-400",
     },
@@ -108,7 +108,7 @@ const ConnectionMetrics = ({ identity }: { identity: string | null }) => {
         : "text-amber-600 dark:text-amber-400",
     },
     {
-      label: "Auto-reconnect",
+      label: "HTTP Polling",
       value: "Enabled",
       icon: RefreshCw,
       color: "text-emerald-600 dark:text-emerald-400",

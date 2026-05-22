@@ -324,7 +324,7 @@ export const SpacetimeUI: React.FC<SpacetimeUIProps> = ({
   className = "",
   onLogout,
 }) => {
-  const { registerEventCallbacks, connection, isConnected } = useSpacetimeDB();
+  const { registerEventCallbacks, connection, isConnected, connect } = useSpacetimeDB();
   const { connectionStatus, identity } = useAppSelector(
     (state) => state.spacetime
   );
@@ -387,6 +387,14 @@ export const SpacetimeUI: React.FC<SpacetimeUIProps> = ({
     };
     registerEventCallbacks(defaultCallbacks);
   }, [registerEventCallbacks, customEventCallbacks]);
+
+  // Auto-connect via HTTP on mount so tables and reducers are discovered immediately
+  // without requiring the user to manually click the Connect button.
+  useEffect(() => {
+    void connect();
+    // Intentionally run only once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const patternGrouper = new PatternGrouper(navigationConfig);
 
@@ -580,7 +588,7 @@ export const SpacetimeUI: React.FC<SpacetimeUIProps> = ({
     (tab) => tab.id === activeTab
   )?.component;
 
-  const retryDiscovery = () => {};
+  const retryDiscovery = () => { void connect(); };
 
   return (
     <div

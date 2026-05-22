@@ -1,13 +1,12 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
-import { Identity } from "@clockworklabs/spacetimedb-sdk";
-import { DbConnection } from "@/generated";
+import { SpacetimeConnection } from "@/lib/spacetime-http";
 import { processTableDataForRedux } from "@/utils/serialization";
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
 interface SpacetimeState {
   connectionStatus: ConnectionStatus;
-  connection: DbConnection | null;
+  connection: SpacetimeConnection | null;
   identity: string | null;
   error: string | null;
   [key: string]: any;
@@ -34,7 +33,7 @@ const spacetimeSlice = createSlice({
     setConnectionStatus: (state, action: PayloadAction<ConnectionStatus>) => {
       state.connectionStatus = action.payload;
     },
-    setConnection: (state, action: PayloadAction<DbConnection | null>) => {
+    setConnection: (state, action: PayloadAction<SpacetimeConnection | null>) => {
       state.connection = action.payload;
     },
     setIdentity: (state, action: PayloadAction<string>) => {

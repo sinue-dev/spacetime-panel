@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { LucideIcon } from "lucide-react";
-import type { DbConnection } from "@/generated";
+import type { SpacetimeConnection } from "@/lib/spacetime-http";
 
 export const ConnectionStatusSchema = z.enum([
   "disconnected",
@@ -11,7 +11,7 @@ export const ConnectionStatusSchema = z.enum([
 
 export const BaseSpacetimeStateSchema = z.object({
   connectionStatus: ConnectionStatusSchema,
-  connection: z.custom<DbConnection>().nullable(),
+  connection: z.custom<SpacetimeConnection>().nullable(),
   identity: z.string().nullable(),
   error: z.string().nullable(),
 });

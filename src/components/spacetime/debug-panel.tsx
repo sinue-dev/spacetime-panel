@@ -123,11 +123,11 @@ const SystemHealth = ({
 }) => {
   const healthChecks = [
     {
-      name: "WebSocket Connection",
+      name: "HTTP API Connection",
       status: connection ? "healthy" : "error",
       description: connection
-        ? "Active connection established"
-        : "No connection available",
+        ? "Active HTTP connection established"
+        : "No HTTP connection available",
     },
     {
       name: "Authentication",
